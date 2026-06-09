@@ -774,6 +774,50 @@ def vis_all_imgs(
     torchvision.utils.save_image(all_imgs, os.path.join(output_folder, f"{output_prefix}.png"))
 
 
+def export_keyframe_cameras(
+    output_folder: str,
+    selected_view_ids: Tensor,
+    normalized_c2w_poses: Tensor,
+    metric_c2w_poses: Tensor,
+    intrinsic: Tensor,
+    image_width: int,
+    image_height: int,
+):
+    # 中文说明：视频关键帧实验虽然不需要点云重建，但需要保留每张关键帧对应的相机位姿。
+    # 这里导出作者数据集给定的 metric c2w，以及模型内部实际使用的 normalized c2w。
+    selected_view_ids = selected_view_ids.detach().cpu().tolist()
+    normalized_c2w_poses = normalized_c2w_poses.detach().cpu().float().numpy()
+    metric_c2w_poses = metric_c2w_poses.detach().cpu().float().numpy()
+    intrinsic = intrinsic.detach().cpu().float().numpy()
+
+    keyframes = []
+    for frame_idx, source_view_id in enumerate(selected_view_ids):
+        keyframes.append(
+            {
+                "keyframe_index": frame_idx,
+                "keyframe_file": f"rgb_{frame_idx}.png",
+                "source_frame": f"frame_{int(source_view_id)}",
+                "source_view_id": int(source_view_id),
+                "normalized_c2w": normalized_c2w_poses[frame_idx].tolist(),
+                "metric_c2w": metric_c2w_poses[frame_idx].tolist(),
+            }
+        )
+
+    payload = {
+        "coordinate_note": (
+            "metric_c2w comes from the dataset cameras.json. normalized_c2w is the relative/scaled pose "
+            "used internally by SpatialGen, with view 0 as reference."
+        ),
+        "image_width": int(image_width),
+        "image_height": int(image_height),
+        "intrinsic": intrinsic.tolist(),
+        "num_keyframes": len(keyframes),
+        "keyframes": keyframes,
+    }
+    with open(os.path.join(output_folder, "keyframe_cameras.json"), "w") as f:
+        json.dump(payload, f, indent=2)
+
+
 @torch.no_grad()
 def model_inference(
     args,
@@ -1130,6 +1174,17 @@ def model_inference(
         # 中文说明：--skip_reconstruction 用于“只生成多视角图片”。
         # 这里在保存 rgb/depth/semantic 可视化后直接返回，避免进入 Open3D 点云对齐和相机轨迹导出。
         if args.skip_reconstruction:
+            all_selected_normalized_poses = all_c2w_poses[0, list(in_view_ids) + list(tar_view_ids)]
+            all_selected_metric_poses = all_c2w_metric_poses[0, list(in_view_ids) + list(tar_view_ids)]
+            export_keyframe_cameras(
+                output_folder=output_folder,
+                selected_view_ids=selected_view_ids,
+                normalized_c2w_poses=all_selected_normalized_poses,
+                metric_c2w_poses=all_selected_metric_poses,
+                intrinsic=intrinsic_mat,
+                image_width=w,
+                image_height=h,
+            )
             vis_all_imgs(
                 in_view_rgbs=in_view_rgbs,
                 tar_view_rgbs=fake_tar_rgbs,
