@@ -8,7 +8,23 @@ import numpy as np
 import shapely
 import trimesh
 
-from src.utils.colormaps import CEILING_COLOR, COLOR2LABELS, FLOOR_COLOR, WALL_COLOR
+# 中文说明：该文件会被预处理脚本按文件直接加载，此时不能依赖 src.utils 包初始化。
+# 如果常规包导入触发 Open3D 等重依赖失败，就退回到直接加载 colormaps.py。
+try:
+    from src.utils.colormaps import CEILING_COLOR, COLOR2LABELS, FLOOR_COLOR, WALL_COLOR
+except Exception:
+    import importlib.util
+    from pathlib import Path
+
+    colormaps_path = Path(__file__).with_name("colormaps.py")
+    spec = importlib.util.spec_from_file_location("_spatialgen_colormaps", colormaps_path)
+    colormaps_module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(colormaps_module)
+    CEILING_COLOR = colormaps_module.CEILING_COLOR
+    COLOR2LABELS = colormaps_module.COLOR2LABELS
+    FLOOR_COLOR = colormaps_module.FLOOR_COLOR
+    WALL_COLOR = colormaps_module.WALL_COLOR
 
 colormaps = {v: k for k, v in COLOR2LABELS.items()}
 

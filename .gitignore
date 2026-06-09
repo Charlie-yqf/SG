@@ -166,3 +166,9 @@ cython_debug/
 *.txt
 *.rrd
 # *.ply
+
+# Local SpatialGen experiment artifacts
+out/
+spatialgen_ckpts
+FLUX.1-Wireframe-dev-lora
+scripts/infer_spatialgen_t2s_skip_recons.sh

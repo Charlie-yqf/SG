@@ -2,6 +2,7 @@ import sys
 sys.path.append(".")
 sys.path.append("..")
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,8 +20,14 @@ from pytorch3d.renderer import (
 from pytorch3d.structures import Meshes
 from pytorch3d.utils.camera_conversions import cameras_from_opencv_projection
 
-
-from src.utils.flux_utils import parse_layout_data
+# 中文说明：预处理只需要 flux_utils.parse_layout_data。
+# 直接按文件加载可以避开 src.utils.__init__ 中的 Open3D 依赖，适合只生成 ControlNet 条件图的流程。
+flux_utils_path = Path(__file__).resolve().parents[1] / "src" / "utils" / "flux_utils.py"
+spec = importlib.util.spec_from_file_location("_spatialgen_flux_utils", flux_utils_path)
+flux_utils = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(flux_utils)
+parse_layout_data = flux_utils.parse_layout_data
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 wireframe = trimesh.load_mesh("./assets/wireframe.ply")

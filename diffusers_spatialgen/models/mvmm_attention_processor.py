@@ -7,6 +7,9 @@ from diffusers.utils import logging
 
 logger = logging.get_logger(__name__)
 
+# 中文说明：这个文件保留了作者原来的类名，但内部 attention 已改为 PyTorch SDPA。
+# 这样可以绕开当前环境中不可用的 xformers.ops，同时不改调用侧模型结构。
+
 # Copied from diffusers.models.attention_processor.JointAttnProcessor2_0
 # The only modifications: reshape qkv by `num_views`
 class JointMVAttnProcessor2_0:
@@ -174,17 +177,23 @@ class XFormersMVAttnProcessor:
             value = rearrange(value, "(b v) l d -> b (v l) d", v=num_all_views)
         # logger.info(f"[XFormersMVAttnProcessor]: {attn_type} query shape: {query.shape}, key shape: {key.shape}, value shape: {value.shape}")
             
-        query = attn.head_to_batch_dim(query).contiguous()
-        key = attn.head_to_batch_dim(key).contiguous()
-        value = attn.head_to_batch_dim(value).contiguous()
+        inner_dim = key.shape[-1]
+        head_dim = inner_dim // attn.heads
+        attn_batch_size = query.shape[0]
+
+        query = query.view(attn_batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        key = key.view(attn_batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        value = value.view(attn_batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        if attention_mask is not None:
+            attention_mask = attention_mask.view(attn_batch_size, attn.heads, -1, attention_mask.shape[-1])
         # logger.info(f"[XFormersMVAttnProcessor]: {attn_type} reshaped query shape: {query.shape}, key shape: {key.shape}, value shape: {value.shape}")
 
-        hidden_states = xformers.ops.memory_efficient_attention(  # query: (bm) l c -> b (ml) c;  key: b (nl) c
-            query, key, value, attn_bias=attention_mask, op=self.attention_op, scale=attn.scale
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
         # logger.info(f"[XFormersMVAttnProcessor]: {attn_type} attented hidden_states shape: {hidden_states.shape}")
+        hidden_states = hidden_states.transpose(1, 2).reshape(attn_batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
@@ -275,15 +284,23 @@ class XFormersJointAttnProcessor:
             value = rearrange(value, "(b n_t v) l d ->  (b v) (n_t l) d", n_t=num_tasks, v=num_all_views)
         # logger.info(f"[XFormersJointAttnProcessor]: query {query.shape}, key {key.shape}, value {value.shape}")
 
-        query = attn.head_to_batch_dim(query).contiguous()
-        key = attn.head_to_batch_dim(key).contiguous()
-        value = attn.head_to_batch_dim(value).contiguous()
+        inner_dim = key.shape[-1]
+        head_dim = inner_dim // attn.heads
+        attn_batch_size = query.shape[0]
+
+        query = query.view(attn_batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        key = key.view(attn_batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        value = value.view(attn_batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        if attention_mask is not None:
+            attention_mask = attention_mask.view(attn_batch_size, attn.heads, -1, attention_mask.shape[-1])
         # logger.info(f"[XFormersJointAttnProcessor]: reshaped query {query.shape}, key {key.shape}, value {value.shape}")
 
-        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask, op=self.attention_op, scale=attn.scale)
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        )
         # logger.info(f"[XFormersJointAttnProcessor]: score : {hidden_states.shape}")
 
-        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = hidden_states.transpose(1, 2).reshape(attn_batch_size, -1, attn.heads * head_dim)
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)

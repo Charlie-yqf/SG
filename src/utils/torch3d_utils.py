@@ -1,7 +1,18 @@
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import numpy as np
-import open3d as o3d
+
+# 中文说明：这里的 PyTorch3D 栅格化函数可独立工作，Open3D 只用于调试/点云输出。
+# 将 Open3D 设为可选，保证无 libGL 环境下仍能跑多视角图片生成。
+try:
+    import open3d as o3d
+except OSError as exc:
+    o3d = None
+    OPEN3D_IMPORT_ERROR = exc
+else:
+    OPEN3D_IMPORT_ERROR = None
 
 # Data structures and functions for rendering
 from pytorch3d.structures import Pointclouds

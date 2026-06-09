@@ -2,6 +2,9 @@ import torch
 import torch.nn.functional as F
 from src.utils.typing import *
 
+# 中文说明：相机/射线工具的大部分函数不需要 Open3D。
+# Open3D 只在点云可视化函数中使用，因此改成可选导入，避免关键帧推理被 libGL 阻断。
+
 def get_ray_directions(
     H: int,
     W: int,
@@ -306,7 +309,13 @@ def project_points(points: torch.Tensor, extrinsic: torch.Tensor):
     points = points[:,:,:3] / points[:, :, 3:]
     return points
 
-import open3d as o3d
+try:
+    import open3d as o3d
+except OSError as exc:
+    o3d = None
+    OPEN3D_IMPORT_ERROR = exc
+else:
+    OPEN3D_IMPORT_ERROR = None
 
 def cvt_to_perspective_pointcloud(rgb_image: torch.Tensor,
                                   depth_image: torch.Tensor, 
@@ -318,6 +327,9 @@ def cvt_to_perspective_pointcloud(rgb_image: torch.Tensor,
     depth: (1, H, W)
     
     """
+    if o3d is None:
+        raise RuntimeError(f"Open3D is required for point cloud export: {OPEN3D_IMPORT_ERROR}")
+
     C, H, W = depth_image.shape
     K = torch.tensor([
                 [1 / np.tan(wfov_rad / 2.), 0., 0., 0.],

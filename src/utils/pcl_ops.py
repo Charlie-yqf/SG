@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import os.path as osp
 
@@ -5,7 +7,16 @@ import random
 from copy import deepcopy
 import torch
 import numpy as np
-import open3d as o3d
+
+# 中文说明：本文件主要服务点云导出/可视化。关键帧生成路径不会调用这些点云函数，
+# 所以 Open3D 改成可选依赖，避免缺少 libGL 时影响纯图片导出。
+try:
+    import open3d as o3d
+except OSError as exc:
+    o3d = None
+    OPEN3D_IMPORT_ERROR = exc
+else:
+    OPEN3D_IMPORT_ERROR = None
 from PIL import Image
 import torchvision
 from einops import rearrange

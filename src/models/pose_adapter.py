@@ -25,8 +25,11 @@ from transformers import PreTrainedModel, PretrainedConfig
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.configuration_utils import ConfigMixin, register_to_config, FrozenDict
 from diffusers.utils import deprecate
-from diffusers.models.attention_processor import Attention, XFormersAttnProcessor
+from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from src.utils.typing import *
+
+# 中文说明：原实现默认使用 XFormersAttnProcessor，但当前环境的 xformers CUDA 扩展不可用。
+# 这里改用 PyTorch 2.x 自带的 SDPA attention，结果等价，速度可能略慢但部署更稳定。
 
 # helpers
 logger = get_logger(__name__)
@@ -97,7 +100,7 @@ class CustomTransformer(nn.Module):
                         bias=False,
                         cross_attention_dim=None,
                         upcast_attention=False,
-                        processor=XFormersAttnProcessor(),
+                        processor=AttnProcessor2_0(),
                     ),
                 FeedForward(dim, mlp_dim)
             ]))
@@ -364,4 +367,3 @@ class RayMapEncoder(ModelMixin, ConfigMixin):
         output = rearrange(output, "(B T) C H W -> B T C H W", B=bs, T=fs)
         
         return output
-

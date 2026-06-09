@@ -1,7 +1,18 @@
+from __future__ import annotations
+
 import os
 import cv2
 import numpy as np
-import open3d as o3d
+
+# 中文说明：全景工具中的 Open3D 仅用于点云保存/显示；当前视频关键帧流程不依赖它。
+# 因此这里允许 Open3D 导入失败，等真正调用点云函数时再报错。
+try:
+    import open3d as o3d
+except OSError as exc:
+    o3d = None
+    OPEN3D_IMPORT_ERROR = exc
+else:
+    OPEN3D_IMPORT_ERROR = None
 import torch
 
 from src.utils.typing import *

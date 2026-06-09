@@ -17,7 +17,16 @@ import accelerate
 import torch
 import torchvision
 import numpy as np
-import open3d as o3d
+
+# 中文说明：当前目标只需要导出多视角 RGB 关键帧，不需要 Open3D 点云重建。
+# 因此 Open3D 改成可选依赖；只有走 Sparse-RaDeGS/PLY 导出路径时才会强制要求它。
+try:
+    import open3d as o3d
+except OSError as exc:
+    o3d = None
+    OPEN3D_IMPORT_ERROR = exc
+else:
+    OPEN3D_IMPORT_ERROR = None
 from einops import rearrange
 from PIL import Image
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -493,7 +502,7 @@ def align_and_save_pointcloud(
     reference_renderings: Optional[Tuple] = None,
     input_depth_masks: Optional[Float[Tensor, "BNt 1 H W"]] = None,
     output_depth_masks: Optional[Float[Tensor, "BNt 1 H W"]] = None,
-) -> o3d.geometry.PointCloud:
+) -> Any:
     """
     align and save input and output point cloud
 
@@ -516,6 +525,9 @@ def align_and_save_pointcloud(
     Returns:
         o3d.geometry.PointCloud: aligned point cloud
     """
+    if o3d is None:
+        raise RuntimeError(f"Open3D is required for point cloud export: {OPEN3D_IMPORT_ERROR}")
+
     return_data_dict = {} if return_data_dict is None else return_data_dict
     os.makedirs(output_folder, exist_ok=True)
 
@@ -1115,6 +1127,32 @@ def model_inference(
         scene_scale = batch["scene_scale"][0:1].cpu()
         print("validating RGB-D-Sem task on room {}".format(room_uid))
 
+        # 中文说明：--skip_reconstruction 用于“只生成多视角图片”。
+        # 这里在保存 rgb/depth/semantic 可视化后直接返回，避免进入 Open3D 点云对齐和相机轨迹导出。
+        if args.skip_reconstruction:
+            vis_all_imgs(
+                in_view_rgbs=in_view_rgbs,
+                tar_view_rgbs=fake_tar_rgbs,
+                in_view_lay_deps=in_lay_depth_images if opt.use_layout_prior else None,
+                tar_view_lay_deps=tar_lay_depth_images if opt.use_layout_prior else None,
+                in_view_lay_sems=in_lay_sem_images if opt.use_layout_prior else None,
+                tar_view_lay_sems=tar_lay_sem_images if opt.use_layout_prior else None,
+                in_view_depths=vis_fake_in_depths,
+                tar_view_depths=vis_fake_tar_depths,
+                in_view_sems=fake_in_sems,
+                tar_view_sems=fake_tar_sems,
+                output_prefix="all_preds",
+                output_folder=output_folder,
+            )
+            pred_images = (
+                torch.from_numpy(pred_images * 2.0 - 1.0)
+                .permute(0, 3, 1, 2)
+                .to(dtype=weight_dtype)
+                .to(all_rgbs.device)
+            )
+            empty_ply = torch.empty((0, 6), dtype=weight_dtype, device=all_rgbs.device)
+            return empty_ply, pred_images.clamp(-1.0, 1.0), {}, empty_ply
+
         # align the generated scm with the global SCM
         recons_ply, room_infer_results, recons_sem_ply = align_and_save_pointcloud(
             input_images=in_view_rgbs.float(),
@@ -1198,8 +1236,7 @@ def inference_controlnet(
             num_inference_steps=num_infer_steps,
             generator=generator,
             control_image=control_image_pil,
-            controlnet_conditioning_scale=0.7,
-            guidance_scale=3.5,
+                guidance_scale=3.5,
             height=1024,
             width=1024,
             num_images_per_prompt=1,
@@ -1266,7 +1303,10 @@ def log_val_autoregressive_from_dataloader(
 
     pipeline.to(device)
     pipeline.set_progress_bar_config(disable=True)
-    pipeline.enable_xformers_memory_efficient_attention()
+    try:
+        pipeline.enable_xformers_memory_efficient_attention()
+    except Exception as e:
+        logger.warning(f"Skip xformers memory efficient attention: {e}")
 
     if args.seed is None:
         generator = None
@@ -1515,24 +1555,32 @@ def log_val_autoregressive_from_dataloader(
             avg_time += end_tms - begin_tms
             if round_idx == num_round - 1 or len(rest_view_ids) == 0:
                 # save the global scene ply
-                ply_path = os.path.join(room_output_folder, f"global_scene_ply.ply")
-                pcl = o3d.geometry.PointCloud()
-                pcl.points = o3d.utility.Vector3dVector(global_scene_ply[:, :3].cpu().numpy())
-                pcl.colors = o3d.utility.Vector3dVector(global_scene_ply[:, 3:].cpu().numpy())
-                o3d.io.write_point_cloud(ply_path, pcl)
+                # 中文说明：只在完整 3D 重建路径里写 PLY；关键帧导出路径不需要这些产物。
+                if not args.skip_reconstruction:
+                    if o3d is None:
+                        raise RuntimeError(f"Open3D is required for point cloud export: {OPEN3D_IMPORT_ERROR}")
+                    ply_path = os.path.join(room_output_folder, f"global_scene_ply.ply")
+                    pcl = o3d.geometry.PointCloud()
+                    pcl.points = o3d.utility.Vector3dVector(global_scene_ply[:, :3].cpu().numpy())
+                    pcl.colors = o3d.utility.Vector3dVector(global_scene_ply[:, 3:].cpu().numpy())
+                    o3d.io.write_point_cloud(ply_path, pcl)
 
-                # save the global scene semantic ply
-                ply_path = os.path.join(room_output_folder, f"global_scene_sem_ply.ply")
-                pcl = o3d.geometry.PointCloud()
-                pcl.points = o3d.utility.Vector3dVector(global_scene_sem_ply[:, :3].cpu().numpy())
-                pcl.colors = o3d.utility.Vector3dVector(global_scene_sem_ply[:, 3:].cpu().numpy())
-                o3d.io.write_point_cloud(ply_path, pcl)
+                    # save the global scene semantic ply
+                    ply_path = os.path.join(room_output_folder, f"global_scene_sem_ply.ply")
+                    pcl = o3d.geometry.PointCloud()
+                    pcl.points = o3d.utility.Vector3dVector(global_scene_sem_ply[:, :3].cpu().numpy())
+                    pcl.colors = o3d.utility.Vector3dVector(global_scene_sem_ply[:, 3:].cpu().numpy())
+                    o3d.io.write_point_cloud(ply_path, pcl)
                 torch.cuda.empty_cache()
                 gc.collect()
                 break
 
         avg_time /= num_round
         logger.info(f"average inference time: {avg_time}")
+        if args.skip_reconstruction:
+            # 中文说明：视频插帧实验只需要 rgb_*.png，不需要后续 GS 重建使用的 npz 和 camera json。
+            logger.info("Skipping inference_results.npz and camera trajectory export.")
+            continue
         ##################
         ### Step 3: save inference results for gaussian reconstruction and video rendering ###
         ##################
@@ -1641,6 +1689,7 @@ def main():
     parser.add_argument("--guidance_scale", type=float, default=2.0, help="CFG scale used for validation")
     parser.add_argument("--half_precision", action="store_true", help="Use half precision for inference")
     parser.add_argument("--allow_tf32", action="store_true", help="Enable TF32 for faster training on Ampere GPUs")
+    parser.add_argument("--skip_reconstruction", action="store_true", help="Skip Sparse-RaDeGS reconstruction/rendering after exporting multi-view images")
 
     parser.add_argument("--image_path", type=str, default=None, help="Path to the image for reconstruction")
     parser.add_argument(
@@ -1819,15 +1868,18 @@ def main():
         safety_checker=None,
         feature_extractor=None,
     )
-    pipeline.unet.enable_xformers_memory_efficient_attention()
+    try:
+        pipeline.unet.enable_xformers_memory_efficient_attention()
+    except Exception as e:
+        logger.warning(f"Skip xformers memory efficient attention: {e}")
 
     pipeline.to(device).to(dtype=weight_dtype)
     pipeline.set_progress_bar_config(disable=True)
 
     if args.use_controlnet:
         controlnet_pipeline = init_controlnet_pipeline(
-            base_model_path="black-forest-labs/FLUX.1-dev",
-            controlnet_path="manycore-research/FLUX.1-Wireframe-dev-lora",
+            base_model_path=os.environ.get("FLUX_DEV_PATH", "black-forest-labs/FLUX.1-dev"),
+            controlnet_path=os.environ.get("FLUX_WIREFRAME_LORA_PATH", "FLUX.1-Wireframe-dev-lora"),
             device=device,
         )
     else:
@@ -1883,6 +1935,12 @@ def main():
         exp_dir=infer_dir,
         styled_prompt_idx=args.styled_prompt_idx,
     )
+
+    if args.skip_reconstruction:
+        logger.info("Skipping Sparse-RaDeGS reconstruction; multi-view inference images are exported.")
+        torch.cuda.empty_cache()
+        gc.collect()
+        return
 
     ##################
     ### gaussian reconstruction and video rendering ###
