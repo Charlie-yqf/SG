@@ -172,3 +172,6 @@ out/
 spatialgen_ckpts
 FLUX.1-Wireframe-dev-lora
 scripts/infer_spatialgen_t2s_skip_recons.sh
+
+# Local SSH keys, never commit private keys
+.local_ssh/
